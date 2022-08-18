@@ -7,6 +7,18 @@ const CrossTarget = std.zig.CrossTarget;
 const Target = std.Target;
 const arm = std.Target.arm;
 
+// See https://github.com/wendigojaeger/ZigGBA/blob/d80e7fc137a70fbbca170914288133938157a22c/GBA/builder.zig#L21-L29
+const playdateTarget = blk: {
+    var target = CrossTarget{
+        .cpu_arch = Target.Cpu.Arch.arm,
+        .os_tag = .freestanding,
+        .abi = .none,
+        // .cpu_model = .{ .explicit = &arm.cpu.cortex_m7 },
+    };
+    Target.Cpu.Feature.Set.addFeatureSet(&target.cpu_features_add, Target.arm.all_features[@enumToInt(Target.arm.Feature.v7m)].dependencies);
+    break :blk target;
+};
+
 pub fn build(b: *Builder) !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
@@ -17,13 +29,8 @@ pub fn build(b: *Builder) !void {
     const sdkPath = getPlaydateSdkPath(allocator);
     if (sdkPath == null) std.debug.print("Could not find path to Playdate SDK! Define PLAYDATE_SDK_PATH in your environment.\n\tSee https://sdk.play.date/1.12.3/Inside%20Playdate%20with%20C.html#_set_playdate_sdk_path_environment_variable", .{});
 
-    const device = b.addObject("pdex", "src/main.zig");
-    device.setTarget(.{
-        .cpu_arch = .arm,
-        .os_tag = .freestanding,
-        .abi = .eabi,
-        .cpu_features_add = arm.cpu.cortex_m7.features,
-    });
+    const device = b.addExecutable("pdex", "src/main.zig");
+    device.setTarget(playdateTarget);
     device.addIncludeDir(std.fs.path.join(allocator, &[_]string{
         sdkPath.?, "C_API",
     }) catch unreachable);
@@ -32,12 +39,11 @@ pub fn build(b: *Builder) !void {
     }) catch unreachable;
     device.setLinkerScriptPath(.{ .path = linkerScriptPath });
     device.linkLibC();
+    device.defineCMacro("__FPU_USED", null);
     device.setBuildMode(mode);
-    _ = device.installRaw("pdex.elf", .{
-        .format = .bin,
-        .dest_dir = .{ .custom = "" },
-    });
-    std.debug.print("{s}", .{device.out_filename});
+    // See: https://github.com/ziglang/zig/pull/4291
+    // FIXME: const pdexBin = device.installRaw("pdex.bin", .{});
+    // std.debug.print("{s}\n", .{pdexBin.dest_filename});
     b.step("device", "Build application for the Playdate").dependOn(&device.step);
 
     const simulator = b.addSharedLibrary("pdex", "src/main.zig", .unversioned);
@@ -46,6 +52,7 @@ pub fn build(b: *Builder) !void {
     }) catch unreachable);
     simulator.defineCMacro("TARGET_SIMULATOR", null);
     simulator.defineCMacro("TARGET_EXTENSION", null);
+    simulator.linkLibC();
     simulator.setBuildMode(mode);
     simulator.install();
     b.step("simulator", "Build application for the Playdate Simulator").dependOn(&simulator.step);
