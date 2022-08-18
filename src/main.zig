@@ -1,3 +1,4 @@
+const pd = @cImport({ @cInclude("pd_api.h"); });
 const std = @import("std");
 const testing = std.testing;
 

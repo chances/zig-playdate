@@ -12,25 +12,43 @@ pub fn build(b: *Builder) !void {
     defer arena.deinit();
     const allocator = arena.allocator();
     const mode = b.standardReleaseOptions();
-    const lib = b.addStaticLibrary("pdex", "src/main.zig");
 
     // Get path to the Playdate SDK
     const sdkPath = getPlaydateSdkPath(allocator);
-    if (sdkPath == null) std.debug.print("Could not find path to Playdate SDK! Define PLAYDATE_SDK_PATH in your environment.", .{});
+    if (sdkPath == null) std.debug.print("Could not find path to Playdate SDK! Define PLAYDATE_SDK_PATH in your environment.\n\tSee https://sdk.play.date/1.12.3/Inside%20Playdate%20with%20C.html#_set_playdate_sdk_path_environment_variable", .{});
 
-    lib.setTarget(.{
+    const device = b.addObject("pdex", "src/main.zig");
+    device.setTarget(.{
         .cpu_arch = .arm,
         .os_tag = .freestanding,
         .abi = .eabi,
         .cpu_features_add = arm.cpu.cortex_m7.features,
     });
+    device.addIncludeDir(std.fs.path.join(allocator, &[_]string{
+        sdkPath.?, "C_API",
+    }) catch unreachable);
     const linkerScriptPath = std.fs.path.join(allocator, &[_]string{
         sdkPath.?, "C_API", "buildsupport", "link_map.ld",
     }) catch unreachable;
-    lib.setLinkerScriptPath(.{ .path = linkerScriptPath });
-    lib.linkLibC();
-    lib.setBuildMode(mode);
-    lib.install();
+    device.setLinkerScriptPath(.{ .path = linkerScriptPath });
+    device.linkLibC();
+    device.setBuildMode(mode);
+    _ = device.installRaw("pdex.elf", .{
+        .format = .bin,
+        .dest_dir = .{ .custom = "" },
+    });
+    std.debug.print("{s}", .{device.out_filename});
+    b.step("device", "Build application for the Playdate").dependOn(&device.step);
+
+    const simulator = b.addSharedLibrary("pdex", "src/main.zig", .unversioned);
+    simulator.addIncludeDir(std.fs.path.join(allocator, &[_]string{
+        sdkPath.?, "C_API",
+    }) catch unreachable);
+    simulator.defineCMacro("TARGET_SIMULATOR", null);
+    simulator.defineCMacro("TARGET_EXTENSION", null);
+    simulator.setBuildMode(mode);
+    simulator.install();
+    b.step("simulator", "Build application for the Playdate Simulator").dependOn(&simulator.step);
 }
 
 fn getPlaydateSdkPath(allocator: mem.Allocator) ?string {
